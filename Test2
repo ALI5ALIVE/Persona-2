@@ -1,0 +1,200 @@
+import streamlit as st
+import time
+from datetime import datetime
+import plotly.graph_objects as go
+from persona_interview_bot import PersonaInterviewBot  # From previous artifact
+import json
+
+class PersonaInterviewUI:
+    def __init__(self):
+        self.initialize_session_state()
+        
+    def initialize_session_state(self):
+        """Initialize session state variables"""
+        if 'interview_bot' not in st.session_state:
+            st.session_state.interview_bot = PersonaInterviewBot()
+        if 'chat_history' not in st.session_state:
+            st.session_state.chat_history = []
+        if 'interview_started' not in st.session_state:
+            st.session_state.interview_started = False
+        if 'interview_complete' not in st.session_state:
+            st.session_state.interview_complete = False
+        if 'start_time' not in st.session_state:
+            st.session_state.start_time = None
+
+    def create_layout(self):
+        """Create main app layout"""
+        st.set_page_config(page_title="Persona Interview", layout="wide")
+        
+        # Header
+        st.header("AI Persona Interview")
+        
+        # Create two columns for main layout
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            self.create_chat_interface()
+        
+        with col2:
+            self.create_sidebar_metrics()
+
+    def create_chat_interface(self):
+        """Create the main chat interface"""
+        # Chat container
+        chat_container = st.container()
+        
+        with chat_container:
+            # Display chat history
+            for message in st.session_state.chat_history:
+                if message['role'] == 'assistant':
+                    with st.chat_message('assistant'):
+                        st.write(message['content'])
+                else:
+                    with st.chat_message('user'):
+                        st.write(message['content'])
+            
+            # Start interview button
+            if not st.session_state.interview_started:
+                if st.button("Start Interview"):
+                    st.session_state.interview_started = True
+                    st.session_state.start_time = time.time()
+                    self.start_interview()
+                    st.experimental_rerun()
+            
+            # Input for ongoing interview
+            if st.session_state.interview_started and not st.session_state.interview_complete:
+                self.handle_user_input()
+
+    def create_sidebar_metrics(self):
+        """Create sidebar with interview metrics and progress"""
+        # Timer
+        if st.session_state.interview_started and not st.session_state.interview_complete:
+            elapsed_time = time.time() - st.session_state.start_time
+            remaining_time = max(1200 - elapsed_time, 0)  # 20 minutes in seconds
+            
+            # Progress bar
+            progress = min(elapsed_time / 1200, 1)
+            st.progress(progress)
+            
+            # Time remaining
+            st.metric("Time Remaining", f"{int(remaining_time/60)}:{int(remaining_time%60):02d}")
+        
+        # Section progress
+        if st.session_state.interview_started:
+            self.display_section_progress()
+
+    def display_section_progress(self):
+        """Display progress of each interview section"""
+        sections = st.session_state.interview_bot.sections
+        
+        # Create progress chart
+        fig = go.Figure(go.Bar(
+            x=[sections[s]['time'] for s in sections],
+            y=list(sections.keys()),
+            orientation='h',
+            marker_color=['#2ecc71' if sections[s]['completed'] 
+                         else '#3498db' for s in sections]
+        ))
+        
+        fig.update_layout(
+            title="Interview Progress",
+            height=300,
+            margin=dict(l=0, r=0, t=30, b=0)
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+
+    def start_interview(self):
+        """Initialize the interview"""
+        first_question = st.session_state.interview_bot.start_interview()
+        st.session_state.chat_history.append({
+            'role': 'assistant',
+            'content': first_question['text']
+        })
+
+    def handle_user_input(self):
+        """Handle user input and generate responses"""
+        user_input = st.chat_input("Your response:")
+        
+        if user_input:
+            # Add user message to chat history
+            st.session_state.chat_history.append({
+                'role': 'user',
+                'content': user_input
+            })
+            
+            # Get bot response
+            current_question = st.session_state.interview_bot.questions[
+                st.session_state.interview_bot._get_current_section()
+            ][0]
+            
+            response = st.session_state.interview_bot.process_response(
+                user_input, current_question
+            )
+            
+            # Check if interview is complete
+            if response.get('type') == 'wrap_up':
+                self.handle_interview_completion(response['summary'])
+            else:
+                st.session_state.chat_history.append({
+                    'role': 'assistant',
+                    'content': response['question']
+                })
+            
+            st.experimental_rerun()
+
+    def handle_interview_completion(self, summary):
+        """Handle the end of the interview"""
+        st.session_state.interview_complete = True
+        
+        # Display completion message
+        st.session_state.chat_history.append({
+            'role': 'assistant',
+            'content': "Thank you for your time! I've compiled a summary of our discussion."
+        })
+        
+        # Create and display persona card
+        self.create_persona_card(summary)
+
+    def create_persona_card(self, summary):
+        """Create and display the final persona card"""
+        st.subheader("Generated Persona")
+        
+        # Create expandable sections for each aspect of the persona
+        with st.expander("Role Characteristics", expanded=True):
+            st.write(summary['role_characteristics'])
+            
+        with st.expander("Key Challenges"):
+            st.write(summary['key_challenges'])
+            
+        with st.expander("Learning Preferences"):
+            st.write(summary['learning_preferences'])
+            
+        with st.expander("Buying Behavior"):
+            st.write(summary['buying_behavior'])
+        
+        # Export options
+        if st.button("Export Persona"):
+            self.export_persona(summary)
+
+    def export_persona(self, summary):
+        """Export the persona data"""
+        export_data = {
+            'persona': summary,
+            'chat_history': st.session_state.chat_history,
+            'interview_date': datetime.now().isoformat()
+        }
+        
+        st.download_button(
+            label="Download Persona Data",
+            data=json.dumps(export_data, indent=2),
+            file_name="persona_export.json",
+            mime="application/json"
+        )
+
+def main():
+    app = PersonaInterviewUI()
+    app.create_layout()
+
+if __name__ == "__main__":
+    main()
